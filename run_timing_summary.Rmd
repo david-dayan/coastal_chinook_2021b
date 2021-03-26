@@ -1,0 +1,456 @@
+---
+title: "Coastal Chinook 2021(b) Run timing summary"
+output:
+  html_document:
+    df_print: paged
+    code_folding: hide
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+---
+
+
+```{r, message=FALSE, warning=FALSE}
+require(tidyverse)
+require(adegenet)
+require(knitr)
+```
+
+
+# Summary
+
+Quickly summarise variation at run timing markers among the 2020 Coastal Chinook samples from Siletz, Trask and Nestucca rivers
+
+## Genotype Data Summary
+
+Data were genotyped using the Ots333 panel.
+
+Notebook detailing genotyping available at https://github.com/david-dayan/coastal_chinook_2021b.
+
+Final genotype data contained 295 loci and 373 individuals. 
+
+```{r}
+#load in the data for the project
+load("genotype_data/genind_2.0.R")
+load("genotype_data/genotypes_2.2.R")
+```
+
+
+## Metadata Summary
+
+Let's get a feel for what's in these data:
+
+```{r, message=FALSE, warning=FALSE}
+tmp <- read_csv("metadata/CoastalChinook_Run017_Metadata.csv")
+metadata <- left_join(select(genos_2.2, trunc_sample, `Ots_SEXY3-1`, pop), tmp, by = c("trunc_sample" = "Individual Name"))
+rm(tmp)
+
+#rivers
+kable(metadata %>%
+        group_by(pop) %>%
+        tally() %>%
+        ungroup())
+
+#sampling locations
+kable(metadata %>%
+        group_by(IndividualSampleLOCATION) %>%
+        tally() %>%
+        ungroup())
+
+#runs
+kable(metadata %>%
+        group_by(Run) %>%
+        tally() %>%
+        ungroup())
+
+#sampling dates
+metadata$DateSampled <- as.Date(metadata$DateSampled, format = "%m/%d/%Y")
+ggplot(data = metadata)+geom_histogram(aes(x = DateSampled))+scale_x_date()+theme_classic()
+
+```
+
+Fish are from Siletz, Trask and Nestucca. All identified as spring run fish, from May to late August. 
+
+# Run Timing Markers
+
+Let's take a look at the distribution of run timing alleles across sampling dates and locations.
+
+## Prep
+
+### Marker Polarization  
+
+First we need to read in marker information and filter our dataset for run-timing markers. Then we need to polarize the alleles using data from samples with known phenotypes.
+
+```{r, message=FALSE, warning=FALSE}
+panel_info <- readxl::read_xlsx("metadata/Ots Loci Information. BPA. IDT. PROBEseq 1Feb2021.xlsx", sheet = 2)
+
+#check which locus names don't match and why
+#colnames(genos_2.2)[!(colnames(genos_2.2) %in% panel_info$Assay)]
+
+# it looks like all of the marker names match up, the only hiccup is the SWFSC RoSA markers aren't included (e.g. Ots37124-12281207), we'll just include those manually when we filter
+
+#manually make a vector of all the run-timing marker names (since no field fully captures this information)
+
+run_timing_marker_names <- c("Ots28_11073102", "Ots28_11202863", "Ots28_11186543", "Ots28_11033282", "Ots28_11202400", "Ots28_11062192", "Ots28_11025336", "Ots28_11095755", "Ots28_11077576", "Ots28_11202190", "Ots28_11077172", "Ots28_11160599", "Ots28_11205993", "Ots28_11075712", "Ots28_11072994", "Ots28_11164637", "Ots28_11201129", "Ots28_11073668", "Ots28_11023212", "Ots28_11077016", "Ots28_11206740", "Ots28_11143508", "Ots28_11070757", "Ots28_11071377", "Ots28_11207428", "Ots28_11205423", "Ots28_11075348", "Ots37124-12267397", "Ots37124-12270118", "Ots37124-12272852", "Ots37124-12277401", "Ots37124-12279142", "Ots37124-12281207", "Ots37124-12310649")
+
+run_timing_marker_names[!(run_timing_marker_names %in% colnames(genos_2.2))]
+```
+
+Only two markers from the set of known run-timing markers are missing from our dataset. The first (Ots37124-12270118) was not included in the panel because of primer-interactions. The second is a duplicate of Ots28_11075348 and was also excluded. Everything looks good!
+
+```{r, message=FALSE, warning=FALSE}
+# it looks like all of the markers we want were successfully genotyped, now lets filter and create a dataset of just these markers
+
+run_timing_genos <- genos_2.2 %>%
+  select(trunc_sample, pop, any_of(run_timing_marker_names))
+
+#let's also get rid of hyphens to make our lives easier late
+colnames(run_timing_genos) <- str_replace(colnames(run_timing_genos), "-", "_")
+
+```
+
+Here's where things get confusing. Not all the markers have been validated in coastal systems, and it's hard to keep track of what allele keys come from what rivers and how they have been validated. 
+
+I decided the best thing to do was to be clear about this and create multiple results.
+
+### Rogue positives from Thompson
+```{r, message=FALSE, warning=FALSE}
+# now lets polarize the markers based on the known positives from the Rogue River
+# here I took samples with known phenotypes from the Rogue river (from Tasha Thompson, one fall two spring) and retained only SNPs that were diagnostic (fixed for alternative alleles among samples (n = 1 and n=2))
+rogue <- read_tsv("polarizing_alleles/rogue_positives.txt")
+colnames(rogue) <- str_replace(colnames(rogue), "-", "_")
+
+#what about other markers
+colnames(run_timing_genos[,3:34])[!(colnames(run_timing_genos[,3:34]) %in% colnames(rogue[,2:23]))]
+```
+22 markers were diagnostic among the known positives in the Rogue, 21 of these are in the genotype results. We'll use these first. 
+
+
+```{r, message=FALSE, warning=FALSE}
+#filter
+rogue_validated_coastal_genos <- run_timing_genos %>%
+  select(trunc_sample, pop, any_of(colnames(rogue[,2:23])))
+
+#now polarize
+# 0 is spring, 1 is fall
+rogue_validated_coastal_genos <- rogue_validated_coastal_genos %>%
+  left_join(select(metadata, trunc_sample, `Ots_SEXY3-1`, DateSampled, IndividualSampleLOCATION)) %>%
+  mutate(JulDate = format(DateSampled, "%j")) %>%
+  mutate(Ots28_11023212 = case_when(
+    Ots28_11023212 == paste(rogue$Ots28_11023212[1],rogue$Ots28_11023212[1], sep = "") ~ "fall",
+    Ots28_11023212 == paste(rogue$Ots28_11023212[2],rogue$Ots28_11023212[2], sep = "") ~ "spring",
+    Ots28_11023212 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11025336 = case_when(
+    Ots28_11025336 == paste(rogue$Ots28_11025336[1],rogue$Ots28_11025336[1], sep = "") ~ "fall",
+    Ots28_11025336 == paste(rogue$Ots28_11025336[2],rogue$Ots28_11025336[2], sep = "") ~ "spring",
+    Ots28_11025336 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11033282 = case_when(
+    Ots28_11033282 == paste(rogue$Ots28_11033282[1],rogue$Ots28_11033282[1], sep = "") ~ "fall",
+    Ots28_11033282 == paste(rogue$Ots28_11033282[2],rogue$Ots28_11033282[2], sep = "") ~ "spring",
+    Ots28_11033282 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11070757 = case_when(
+    Ots28_11070757 == paste(rogue$Ots28_11070757[1],rogue$Ots28_11070757[1], sep = "") ~ "fall",
+    Ots28_11070757 == paste(rogue$Ots28_11070757[2],rogue$Ots28_11070757[2], sep = "") ~ "spring",
+    Ots28_11070757 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11071377 = case_when(
+    Ots28_11071377 == paste(rogue$Ots28_11071377[1],rogue$Ots28_11071377[1], sep = "") ~ "fall",
+    Ots28_11071377 == paste(rogue$Ots28_11071377[2],rogue$Ots28_11071377[2], sep = "") ~ "spring",
+    Ots28_11071377 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11072994 = case_when(
+    Ots28_11072994 == paste(rogue$Ots28_11072994[1],rogue$Ots28_11072994[1], sep = "") ~ "fall",
+    Ots28_11072994 == paste(rogue$Ots28_11072994[2],rogue$Ots28_11072994[2], sep = "") ~ "spring",
+    Ots28_11072994 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11073102 = case_when(
+    Ots28_11073102 == paste(rogue$Ots28_11073102[1],rogue$Ots28_11073102[1], sep = "") ~ "fall",
+    Ots28_11073102 == paste(rogue$Ots28_11073102[2],rogue$Ots28_11073102[2], sep = "") ~ "spring",
+    Ots28_11073102 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11073668 = case_when(
+    Ots28_11073668 == paste(rogue$Ots28_11073668[1],rogue$Ots28_11073668[1], sep = "") ~ "fall",
+    Ots28_11073668 == paste(rogue$Ots28_11073668[2],rogue$Ots28_11073668[2], sep = "") ~ "spring",
+    Ots28_11073668 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11075348 = case_when(
+    Ots28_11075348 == paste(rogue$Ots28_11075348[1],rogue$Ots28_11075348[1], sep = "") ~ "fall",
+    Ots28_11075348 == paste(rogue$Ots28_11075348[2],rogue$Ots28_11075348[2], sep = "") ~ "spring",
+    Ots28_11075348 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11075712 = case_when(
+    Ots28_11075712 == paste(rogue$Ots28_11075712[1],rogue$Ots28_11075712[1], sep = "") ~ "fall",
+    Ots28_11075712 == paste(rogue$Ots28_11075712[2],rogue$Ots28_11075712[2], sep = "") ~ "spring",
+    Ots28_11075712 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11077016 = case_when(
+    Ots28_11077016 == paste(rogue$Ots28_11077016[1],rogue$Ots28_11077016[1], sep = "") ~ "fall",
+    Ots28_11077016 == paste(rogue$Ots28_11077016[2],rogue$Ots28_11077016[2], sep = "") ~ "spring",
+    Ots28_11077016 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11077172 = case_when(
+    Ots28_11077172 == paste(rogue$Ots28_11077172[1],rogue$Ots28_11077172[1], sep = "") ~ "fall",
+    Ots28_11077172 == paste(rogue$Ots28_11077172[2],rogue$Ots28_11077172[2], sep = "") ~ "spring",
+    Ots28_11077172 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11077576 = case_when(
+    Ots28_11077576 == paste(rogue$Ots28_11077576[1],rogue$Ots28_11077576[1], sep = "") ~ "fall",
+    Ots28_11077576 == paste(rogue$Ots28_11077576[2],rogue$Ots28_11077576[2], sep = "") ~ "spring",
+    Ots28_11077576 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11095755 = case_when(
+    Ots28_11095755 == paste(rogue$Ots28_11095755[1],rogue$Ots28_11095755[1], sep = "") ~ "fall",
+    Ots28_11095755 == paste(rogue$Ots28_11095755[2],rogue$Ots28_11095755[2], sep = "") ~ "spring",
+    Ots28_11095755 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11143508 = case_when(
+    Ots28_11143508 == paste(rogue$Ots28_11143508[1],rogue$Ots28_11143508[1], sep = "") ~ "fall",
+    Ots28_11143508 == paste(rogue$Ots28_11143508[2],rogue$Ots28_11143508[2], sep = "") ~ "spring",
+    Ots28_11143508 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11160599 = case_when(
+    Ots28_11160599 == paste(rogue$Ots28_11160599[1],rogue$Ots28_11160599[1], sep = "") ~ "fall",
+    Ots28_11160599 == paste(rogue$Ots28_11160599[2],rogue$Ots28_11160599[2], sep = "") ~ "spring",
+    Ots28_11160599 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11164637 = case_when(
+    Ots28_11164637 == paste(rogue$Ots28_11164637[1],rogue$Ots28_11164637[1], sep = "") ~ "fall",
+    Ots28_11164637 == paste(rogue$Ots28_11164637[2],rogue$Ots28_11164637[2], sep = "") ~ "spring",
+    Ots28_11164637 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11201129 = case_when(
+    Ots28_11201129 == paste(rogue$Ots28_11201129[1],rogue$Ots28_11201129[1], sep = "") ~ "fall",
+    Ots28_11201129 == paste(rogue$Ots28_11201129[2],rogue$Ots28_11201129[2], sep = "") ~ "spring",
+    Ots28_11201129 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(`Ots37124_12277401` = case_when(
+    `Ots37124_12277401` == paste(rogue$`Ots37124_12277401`[1],rogue$`Ots37124_12277401`[1], sep = "") ~ "fall",
+    `Ots37124_12277401` == paste(rogue$`Ots37124_12277401`[2],rogue$`Ots37124_12277401`[2], sep = "") ~ "spring",
+    `Ots37124_12277401` == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(`Ots37124_12281207` = case_when(
+    `Ots37124_12281207` == paste(rogue$`Ots37124_12281207`[1],rogue$`Ots37124_12281207`[1], sep = "") ~ "fall",
+    `Ots37124_12281207` == paste(rogue$`Ots37124_12281207`[2],rogue$`Ots37124_12281207`[2], sep = "") ~ "spring",
+    `Ots37124_12281207` == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(`Ots37124_12310649` = case_when(
+    `Ots37124_12310649` == paste(rogue$`Ots37124_12310649`[1],rogue$`Ots37124_12310649`[1], sep = "") ~ "fall",
+    `Ots37124_12310649` == paste(rogue$`Ots37124_12310649`[2],rogue$`Ots37124_12310649`[2], sep = "") ~ "spring",
+    `Ots37124_12310649` == "00" ~ "00",
+    TRUE ~ "het"))
+
+non_rogue_validated_markers <- colnames(run_timing_genos[,3:34])[!(colnames(run_timing_genos[,3:34]) %in% colnames(rogue[,2:23]))]
+
+rogue_validated_coastal_genos <- rogue_validated_coastal_genos %>%
+left_join(select(run_timing_genos, trunc_sample, all_of(non_rogue_validated_markers)))
+
+#write_tsv(rogue_validated_coastal_genos, "polarizing_alleles/rogue_validated_coastal_genos.txt")
+
+```
+
+
+
+### Koch and Narum Key
+
+Another key is from the Koch and Narum 2020 marker validation paper. I used only markers that were significant in the lower Columbia (coastal lineage - Cowlitz) using a MLM-GWAS of the 33 markers tested in Koch and Narum, 2020
+
+```{r, message=FALSE, warning=FALSE}
+# now lets polarize the markers based on the known positives from the Rogue River
+# here I took samples with known phenotypes from the Rogue river (from Tasha Thompson, one fall two spring) and retained only SNPs that were diagnostic (fixed for alternative alleles among samples (n = 1 and n=2))
+columbia <- read_tsv("polarizing_alleles/columbia_alleles.txt")
+colnames(columbia) <- str_replace(colnames(columbia), "-", "_")
+
+#what about other markers
+colnames(run_timing_genos[,3:34])[!(colnames(run_timing_genos[,3:34]) %in% colnames(columbia[,2:29]))]
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+#filter
+columbia_validated_coastal_genos <- run_timing_genos %>%
+  select(trunc_sample, pop, any_of(colnames(columbia[,2:29])))
+
+#now polarize
+# 0 is spring, 1 is fall
+columbia_validated_coastal_genos <- columbia_validated_coastal_genos %>%
+  left_join(select(metadata, trunc_sample, `Ots_SEXY3-1`, DateSampled, IndividualSampleLOCATION)) %>%
+  mutate(JulDate = format(DateSampled, "%j")) %>%
+  mutate(Ots28_11023212 = case_when(
+    Ots28_11023212 == paste(columbia$Ots28_11023212[1],columbia$Ots28_11023212[1], sep = "") ~ "fall",
+    Ots28_11023212 == paste(columbia$Ots28_11023212[2],columbia$Ots28_11023212[2], sep = "") ~ "spring",
+    Ots28_11023212 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11025336 = case_when(
+    Ots28_11025336 == paste(columbia$Ots28_11025336[1],columbia$Ots28_11025336[1], sep = "") ~ "fall",
+    Ots28_11025336 == paste(columbia$Ots28_11025336[2],columbia$Ots28_11025336[2], sep = "") ~ "spring",
+    Ots28_11025336 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11033282 = case_when(
+    Ots28_11033282 == paste(columbia$Ots28_11033282[1],columbia$Ots28_11033282[1], sep = "") ~ "fall",
+    Ots28_11033282 == paste(columbia$Ots28_11033282[2],columbia$Ots28_11033282[2], sep = "") ~ "spring",
+    Ots28_11033282 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11062192 = case_when(
+    Ots28_11062192 == paste(columbia$Ots28_11062192[1],columbia$Ots28_11062192[1], sep = "") ~ "fall",
+    Ots28_11062192 == paste(columbia$Ots28_11062192[2],columbia$Ots28_11062192[2], sep = "") ~ "spring",
+    Ots28_11062192 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11070757 = case_when(
+    Ots28_11070757 == paste(columbia$Ots28_11070757[1],columbia$Ots28_11070757[1], sep = "") ~ "fall",
+    Ots28_11070757 == paste(columbia$Ots28_11070757[2],columbia$Ots28_11070757[2], sep = "") ~ "spring",
+    Ots28_11070757 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11071377 = case_when(
+    Ots28_11071377 == paste(columbia$Ots28_11071377[1],columbia$Ots28_11071377[1], sep = "") ~ "fall",
+    Ots28_11071377 == paste(columbia$Ots28_11071377[2],columbia$Ots28_11071377[2], sep = "") ~ "spring",
+    Ots28_11071377 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11072994 = case_when(
+    Ots28_11072994 == paste(columbia$Ots28_11072994[1],columbia$Ots28_11072994[1], sep = "") ~ "fall",
+    Ots28_11072994 == paste(columbia$Ots28_11072994[2],columbia$Ots28_11072994[2], sep = "") ~ "spring",
+    Ots28_11072994 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11073102 = case_when(
+    Ots28_11073102 == paste(columbia$Ots28_11073102[1],columbia$Ots28_11073102[1], sep = "") ~ "fall",
+    Ots28_11073102 == paste(columbia$Ots28_11073102[2],columbia$Ots28_11073102[2], sep = "") ~ "spring",
+    Ots28_11073102 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11073668 = case_when(
+    Ots28_11073668 == paste(columbia$Ots28_11073668[1],columbia$Ots28_11073668[1], sep = "") ~ "fall",
+    Ots28_11073668 == paste(columbia$Ots28_11073668[2],columbia$Ots28_11073668[2], sep = "") ~ "spring",
+    Ots28_11073668 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11075348 = case_when(
+    Ots28_11075348 == paste(columbia$Ots28_11075348[1],columbia$Ots28_11075348[1], sep = "") ~ "fall",
+    Ots28_11075348 == paste(columbia$Ots28_11075348[2],columbia$Ots28_11075348[2], sep = "") ~ "spring",
+    Ots28_11075348 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11075712 = case_when(
+    Ots28_11075712 == paste(columbia$Ots28_11075712[1],columbia$Ots28_11075712[1], sep = "") ~ "fall",
+    Ots28_11075712 == paste(columbia$Ots28_11075712[2],columbia$Ots28_11075712[2], sep = "") ~ "spring",
+    Ots28_11075712 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11077016 = case_when(
+    Ots28_11077016 == paste(columbia$Ots28_11077016[1],columbia$Ots28_11077016[1], sep = "") ~ "fall",
+    Ots28_11077016 == paste(columbia$Ots28_11077016[2],columbia$Ots28_11077016[2], sep = "") ~ "spring",
+    Ots28_11077016 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11077172 = case_when(
+    Ots28_11077172 == paste(columbia$Ots28_11077172[1],columbia$Ots28_11077172[1], sep = "") ~ "fall",
+    Ots28_11077172 == paste(columbia$Ots28_11077172[2],columbia$Ots28_11077172[2], sep = "") ~ "spring",
+    Ots28_11077172 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11077576 = case_when(
+    Ots28_11077576 == paste(columbia$Ots28_11077576[1],columbia$Ots28_11077576[1], sep = "") ~ "fall",
+    Ots28_11077576 == paste(columbia$Ots28_11077576[2],columbia$Ots28_11077576[2], sep = "") ~ "spring",
+    Ots28_11077576 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11095755 = case_when(
+    Ots28_11095755 == paste(columbia$Ots28_11095755[1],columbia$Ots28_11095755[1], sep = "") ~ "fall",
+    Ots28_11095755 == paste(columbia$Ots28_11095755[2],columbia$Ots28_11095755[2], sep = "") ~ "spring",
+    Ots28_11095755 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11143508 = case_when(
+    Ots28_11143508 == paste(columbia$Ots28_11143508[1],columbia$Ots28_11143508[1], sep = "") ~ "fall",
+    Ots28_11143508 == paste(columbia$Ots28_11143508[2],columbia$Ots28_11143508[2], sep = "") ~ "spring",
+    Ots28_11143508 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11160599 = case_when(
+    Ots28_11160599 == paste(columbia$Ots28_11160599[1],columbia$Ots28_11160599[1], sep = "") ~ "fall",
+    Ots28_11160599 == paste(columbia$Ots28_11160599[2],columbia$Ots28_11160599[2], sep = "") ~ "spring",
+    Ots28_11160599 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11164637 = case_when(
+    Ots28_11164637 == paste(columbia$Ots28_11164637[1],columbia$Ots28_11164637[1], sep = "") ~ "fall",
+    Ots28_11164637 == paste(columbia$Ots28_11164637[2],columbia$Ots28_11164637[2], sep = "") ~ "spring",
+    Ots28_11164637 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11186543 = case_when(
+    Ots28_11186543 == paste(columbia$Ots28_11186543[1],columbia$Ots28_11186543[1], sep = "") ~ "fall",
+    Ots28_11186543 == paste(columbia$Ots28_11186543[2],columbia$Ots28_11186543[2], sep = "") ~ "spring",
+    Ots28_11186543 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11201129 = case_when(
+    Ots28_11201129 == paste(columbia$Ots28_11201129[1],columbia$Ots28_11201129[1], sep = "") ~ "fall",
+    Ots28_11201129 == paste(columbia$Ots28_11201129[2],columbia$Ots28_11201129[2], sep = "") ~ "spring",
+    Ots28_11201129 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11202190 = case_when(
+    Ots28_11202190 == paste(columbia$Ots28_11202190[1],columbia$Ots28_11202190[1], sep = "") ~ "fall",
+    Ots28_11202190 == paste(columbia$Ots28_11202190[2],columbia$Ots28_11202190[2], sep = "") ~ "spring",
+    Ots28_11202190 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11202400 = case_when(
+    Ots28_11202400 == paste(columbia$Ots28_11202400[1],columbia$Ots28_11202400[1], sep = "") ~ "fall",
+    Ots28_11202400 == paste(columbia$Ots28_11202400[2],columbia$Ots28_11202400[2], sep = "") ~ "spring",
+    Ots28_11202400 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11202863 = case_when(
+    Ots28_11202863 == paste(columbia$Ots28_11202863[1],columbia$Ots28_11202863[1], sep = "") ~ "fall",
+    Ots28_11202863 == paste(columbia$Ots28_11202863[2],columbia$Ots28_11202863[2], sep = "") ~ "spring",
+    Ots28_11202863 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11205423 = case_when(
+    Ots28_11205423 == paste(columbia$Ots28_11205423[1],columbia$Ots28_11205423[1], sep = "") ~ "fall",
+    Ots28_11205423 == paste(columbia$Ots28_11205423[2],columbia$Ots28_11205423[2], sep = "") ~ "spring",
+    Ots28_11205423 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11206740 = case_when(
+    Ots28_11206740 == paste(columbia$Ots28_11206740[1],columbia$Ots28_11206740[1], sep = "") ~ "fall",
+    Ots28_11206740 == paste(columbia$Ots28_11206740[2],columbia$Ots28_11206740[2], sep = "") ~ "spring",
+    Ots28_11206740 == "00" ~ "00",
+    TRUE ~ "het")) %>%
+  mutate(Ots28_11207428 = case_when(
+    Ots28_11207428 == paste(columbia$Ots28_11207428[1],columbia$Ots28_11207428[1], sep = "") ~ "fall",
+    Ots28_11207428 == paste(columbia$Ots28_11207428[2],columbia$Ots28_11207428[2], sep = "") ~ "spring",
+    Ots28_11207428 == "00" ~ "00",
+    TRUE ~ "het"))
+
+
+non_columbia_validated_markers <- colnames(run_timing_genos[,3:34])[!(colnames(run_timing_genos[,3:34]) %in% colnames(columbia[,2:29]))]
+
+columbia_validated_coastal_genos <- columbia_validated_coastal_genos %>%
+left_join(select(run_timing_genos, trunc_sample, all_of(non_columbia_validated_markers)))
+
+#write_tsv(columbia_validated_coastal_genos, "polarizing_alleles/columbia_validated_coastal_genos.txt")
+
+```
+None of the SWFSC RoSA markers included and Ots28_11205993 also missing (most likely filtered out, might be worth to go back and check why). All other markers work.
+
+
+### Include all
+
+## Results
+
+### LD
+
+```{r, message=FALSE, warning=FALSE}
+require(dartR)
+run_genind <- genind_2.0[loc=run_timing_marker_names]
+
+ldr <- poppr::pair.ia(run_genind, limits = c(-0.1, 1.1))
+
+ldr <- rownames_to_column(as.data.frame(ldr), var = "rowid")
+ldr <- ldr %>%
+  separate(rowid, into = c("snp1", "snp2"), sep = ":")
+
+ldr_opposite_tri <- ldr
+colnames(ldr_opposite_tri) <- c("snp2", "snp1", "rbarD")
+ldr <- ldr %>%
+  bind_rows(ldr_opposite_tri)
+
+ggplot(ldr)+geom_tile(aes(snp1, snp2, fill=rbarD))+theme_classic()+theme(axis.text.x = element_text(angle = 90))+scale_fill_gradient(low = "#bdc3c7", high= "#2c3e50")
+
+```
+
+
+
+iris %>% 
+  select(sort(current_vars()))
+
+
+
+
